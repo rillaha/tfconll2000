@@ -114,22 +114,21 @@ with tf.variable_scope("lm") as scope:
         #     rank_b_output, rank_b_state = lm_cell(rank_b_embed, new_state)
         #     rank_b_score = tf.matmul(rank_b_output, lm_w) + lm_b
     else:
-        lm_outputs = []
+        logits_list = []
         state = lm_cell.zero_state(batch_size, dtype=tf.float32)
-        lm_output, state = lm_cell(encode_output, state)
-        lm_outputs.append(lm_output)
+        lm_step_output, state = lm_cell(encode_output, state)
+        step_logits = tf.matmul(lm_step_output, lm_w) + lm_b
+        logits_list.append(step_logits)
         for step in range(1, max_sentence_length):
             scope.reuse_variables()
             step_gold_input = tf.nn.embedding_lookup(W_label_repr, gold[:,step])
-            previous_top = tf.reshape(tf.nn.top_k(lm_output)[1], [batch_size])
+            previous_top = tf.reshape(tf.nn.top_k(step_logits)[1], [batch_size])
             step_top_input = tf.nn.embedding_lookup(W_label_repr, previous_top)
             step_input = tf.cond(is_train_op, lambda:step_gold_input, lambda:step_top_input)
-            lm_output, state = lm_cell(step_input, state)
-            lm_outputs.append(lm_output)
-        lm_output = tf.pack(lm_outputs, axis=1)
-        lm_output_flat = tf.reshape(lm_output, shape=[batch_size*max_sentence_length, lm_size])
-        logits_flat = tf.matmul(lm_output_flat, lm_w) + lm_b
-        logits = tf.reshape(logits_flat, [batch_size, max_sentence_length, num_label])
+            lm_step_output, state = lm_cell(step_input, state)
+            step_logits = tf.matmul(lm_step_output, lm_w) + lm_b
+            logits_list.append(step_logits)
+        logits = tf.pack(logits_list, axis=1)
         loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits, gold)
         # predicts.append(tf.argmax(logits, 1))
         average_loss = tf.reduce_sum(loss) / tf.to_float(tf.reduce_sum(l_word))
