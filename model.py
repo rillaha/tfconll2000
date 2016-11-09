@@ -128,8 +128,9 @@ with tf.variable_scope("lm") as scope:
             lm_step_output, state = lm_cell(step_input, state)
             step_logits = tf.matmul(lm_step_output, lm_w) + lm_b
             logits_list.append(step_logits)
+        # shape(logits)=(batch_size, max_sentence_length, num_label)
         logits = tf.pack(logits_list, axis=1)
-        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits, gold)
+        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits, gold) * tf.sequence_mask(l_word, max_sentence_length, dtype=tf.float32)
         # predicts.append(tf.argmax(logits, 1))
         average_loss = tf.reduce_sum(loss) / tf.to_float(tf.reduce_sum(l_word))
 
