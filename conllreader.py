@@ -1,5 +1,5 @@
 import numpy as np
-import sys, os, random
+import random
 from indexer import *
 
 class ConllDataset:
