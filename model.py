@@ -9,7 +9,7 @@ usePWLoss = False
 np.random.seed(0)
 tf.set_random_seed(0)
 
-batch_size = 2
+batch_size = 32
 max_sentence_length = 78
 max_word_length = 60
 char_size = 50
@@ -23,7 +23,7 @@ num_label = 24
 label_repr_size = encode_size
 beam_width = 10
 
-batch_size = 4
+batch_size = 128
 max_sentence_length = 78
 max_word_length = 60
 char_size = 2
@@ -130,9 +130,13 @@ with tf.variable_scope("lm") as scope:
             logits_list.append(step_logits)
         # shape(logits)=(batch_size, max_sentence_length, num_label)
         logits = tf.pack(logits_list, axis=1)
-        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(logits, gold) * tf.sequence_mask(l_word, max_sentence_length, dtype=tf.float32)
-        # predicts.append(tf.argmax(logits, 1))
-        average_loss = tf.reduce_sum(loss) / tf.to_float(tf.reduce_sum(l_word))
+        mask = tf.sequence_mask(l_word, max_sentence_length, dtype=tf.float32)
+        word_count = tf.to_float(tf.reduce_sum(l_word))
+        loss = tf.reduce_sum(tf.nn.sparse_softmax_cross_entropy_with_logits(logits, gold) * mask)
+        average_loss = loss / word_count
+        predict = tf.to_int32(tf.argmax(logits, dimension=2))
+        correct = tf.reduce_sum(tf.to_float(tf.equal(predict, gold)) * mask)
+        accuracy = correct / word_count
 
 print("make train_op")
 train_op = tf.train.GradientDescentOptimizer(0.1).minimize(average_loss)
@@ -145,19 +149,36 @@ with tf.Session() as sess:
     print("run")
     train_step_end = int(np.ceil(len(train_data.examples) / float(batch_size)))
     dev_step_end = int(np.ceil(len(dev_data.examples) / float(batch_size)))
+    num_train_word = np.sum(train_data.l_word)
+    num_dev_word = np.sum(dev_data.l_word)
     for it in range(10):
+        # train
+        print("train:")
+        train_loss = 0.0
+        train_acc = 0.0
         for step in range(train_step_end):
             sample_x, sample_l_char, sample_l_word, sample_gold = train_data.RandomSample(batch_size)
             fd = {x:sample_x, l_char:sample_l_char, l_word:sample_l_word, gold:sample_gold, is_train_op:True}
-            l, _ = sess.run([average_loss, train_op], feed_dict=fd)
-            if step % (train_step_end // 10) == 0: print(l)
+            al, l, c, _ = sess.run([average_loss, loss, correct, train_op], feed_dict=fd)
+            train_loss += l
+            train_acc += c
+            if step % (train_step_end // 10) == 0: print(al)
+        train_loss /= num_train_word
+        train_acc /= num_train_word
+        print("iter:%d  loss:%.5f acc:%.5f" % (it, train_loss, train_acc))
+
         # show dev score
-        ls = []
+        print("devel:")
+        dev_loss = 0.0
+        dev_acc = 0.0
         for step in range(dev_step_end):
             sample_x, sample_l_char, sample_l_word, sample_gold = dev_data.RandomSample(batch_size)
             fd = {x:sample_x, l_char:sample_l_char, l_word:sample_l_word, gold:sample_gold, is_train_op:False}
-            l = sess.run(average_loss, feed_dict=fd)
-            ls.append(l)
-        print("iter %3d   dev loss:%.5f" % (it, sum(ls)/len(ls)))
+            l, step_correct = sess.run([loss, correct], feed_dict=fd)
+            dev_loss += l
+            dev_acc += step_correct
+        dev_loss /= num_dev_word
+        dev_acc /= num_dev_word
+        print("iter:%d  loss:%.5f acc:%.5f" % (it, dev_loss, dev_acc))
 
 
