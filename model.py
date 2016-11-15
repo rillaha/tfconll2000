@@ -128,10 +128,15 @@ class Model:
             self.encode_output = tf.matmul(self.encode_foutput, self.encode_wf) + tf.matmul(self.encode_boutput, self.encode_wb) + self.encode_b
 
         # PWLoss
-        def NormalizedDistance(lhs, rhs):
-            nlhs = tf.nn.l2_normalize(lhs, 0)
-            nrhs = tf.nn.l2_normalize(rhs, 0)
-            return tf.reduce_sum(tf.square(nlhs - nrhs))
+        def NormalizedDistance(batch_vec, lookup_table):
+            batch_size = batch_vec.get_shape()[0].value
+            dim = batch_vec.get_shape()[1].value
+            nvec = tf.nn.l2_normalize(batch_vec, 1)
+            ntable = tf.nn.l2_normalize(lookup_table, 1)
+            diffs = ntable - tf.reshape(nvec, [batch_size, 1, dim])
+            distances = tf.reduce_sum(tf.square(diffs), 2)
+            # shape(distances)=[batch_size, num_of_lookup_vecs]
+            return distances
 
         # LanguageModel
         self.W_label_repr = tf.Variable(tf.random_uniform([self.num_label, self.label_repr_size], -1.0, 1.0))
