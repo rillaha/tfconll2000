@@ -15,13 +15,13 @@ import tensorflow as tf
 import numpy as np
 
 def Rand(arg):
-    return tf.random_uniform(arg, -1.0, 1.0)
+    return tf.constant(np.random.random(arg))
 
 vec = Rand([3])
 mat = Rand([2,3])
 
 sess = tf.InteractiveSession()
-def Init():
+def init():
     return sess.run(tf.initialize_all_variables())
 run = sess.run
 
