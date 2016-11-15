@@ -100,18 +100,19 @@ class Model:
 
         # c2w
         with tf.variable_scope("c2w"):
+            self.char_vec_flat = tf.reshape(self.char_vec, [self.batch_size*self.max_sentence_length, self.max_word_length, self.char_size])
+            self.l_char_flat = tf.reshape(self.l_char, [self.batch_size*self.max_sentence_length])
             self.c2w_fcell = tf.nn.rnn_cell.BasicLSTMCell(self.c2w_single_size, forget_bias=0.0)
             self.c2w_bcell = tf.nn.rnn_cell.BasicLSTMCell(self.c2w_single_size, forget_bias=0.0)
             self.c2w_wf = tf.Variable(tf.random_uniform([self.c2w_single_size, self.word_size], -1.0, 1.0))
             self.c2w_wb = tf.Variable(tf.random_uniform([self.c2w_single_size, self.word_size], -1.0, 1.0))
             self.c2w_b = tf.Variable(tf.random_uniform([self.word_size], -1.0, 1.0))
-            self.char_vec_flat = tf.reshape(self.char_vec, [self.batch_size*self.max_sentence_length, self.max_word_length, self.char_size])
-            self.l_char_flat = tf.reshape(self.l_char, [self.batch_size*self.max_sentence_length])
             self.c2w_fboutput, self.c2w_final_state = tf.nn.bidirectional_dynamic_rnn(self.c2w_fcell, self.c2w_bcell, self.char_vec_flat, dtype=tf.float32, sequence_length=self.l_char_flat)
             self.c2w_final_forward_state = self.c2w_final_state[0]
             self.c2w_foutput = self.c2w_final_forward_state[1]
-            self.c2w_boutput = tf.reshape(tf.reshape(self.c2w_fboutput[1], [self.batch_size, self.max_sentence_length, self.max_word_length, self.c2w_single_size])[:,:,0,:], [self.batch_size*self.max_sentence_length, self.c2w_single_size])
-            self.c2w_output = tf.reshape(tf.matmul(self.c2w_foutput, self.c2w_wf) + tf.matmul(self.c2w_boutput, self.c2w_wb) + self.c2w_b, [self.batch_size, self.max_sentence_length, self.word_size])
+            self.c2w_boutput = self.c2w_fboutput[1][:,0,:]
+            self.c2w_output_flat = tf.matmul(self.c2w_foutput, self.c2w_wf) + tf.matmul(self.c2w_boutput, self.c2w_wb) + self.c2w_b
+            self.c2w_output = tf.reshape(self.c2w_output_flat, [self.batch_size, self.max_sentence_length, self.word_size])
         self.word_vec = self.c2w_output
 
         # encode
