@@ -139,7 +139,8 @@ class Model:
             return distances
 
         # LanguageModel
-        self.W_label_repr = tf.Variable(tf.random_uniform([self.num_label, self.label_repr_size], -1.0, 1.0))
+        self.W_input_label_repr = tf.Variable(tf.random_uniform([self.num_label+1, self.label_repr_size], -1.0, 1.0))
+        self.W_output_label_repr = tf.Variable(tf.random_uniform([self.num_label+1, self.label_repr_size], -1.0, 1.0))
         self.outputs = []
         with tf.variable_scope("lm") as scope:
             self.lm_cell = tf.nn.rnn_cell.BasicLSTMCell(self.lm_size, forget_bias=0.0)
@@ -151,7 +152,7 @@ class Model:
                 # top_k = tf.nn.top_k(scores, k=beam_width)
                 # for b in range(beam_width):
                 #     rank_b = tf.transpose(top_k[1])[b,:]
-                #     rank_b_embed = tf.nn.embedding_lookup(W_label_repr, rank_b)
+                #     rank_b_embed = tf.nn.embedding_lookup(W_input_label_repr, rank_b)
                 #     scope.reuse_variables()
                 #     rank_b_output, rank_b_state = lm_cell(rank_b_embed, new_state)
                 #     rank_b_score = tf.matmul(rank_b_output, lm_w) + lm_b
@@ -163,9 +164,9 @@ class Model:
                 self.logits_list.append(step_logits)
                 for step in range(1, self.max_sentence_length):
                     scope.reuse_variables()
-                    step_gold_input = tf.nn.embedding_lookup(self.W_label_repr, self.gold[:,step])
+                    step_gold_input = tf.nn.embedding_lookup(self.W_input_label_repr, self.gold[:,step])
                     previous_top = tf.reshape(tf.nn.top_k(step_logits)[1], [self.batch_size])
-                    step_top_input = tf.nn.embedding_lookup(self.W_label_repr, previous_top)
+                    step_top_input = tf.nn.embedding_lookup(self.W_input_label_repr, previous_top)
                     step_input = tf.cond(self.is_train_op, lambda:step_gold_input, lambda:step_top_input)
                     lm_step_output, state = self.lm_cell(step_input, state)
                     step_logits = tf.matmul(lm_step_output, self.lm_w) + self.lm_b
