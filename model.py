@@ -5,6 +5,7 @@ import numpy as np
 import conllreader
 
 usePWLoss = False
+useStructuredLearning = False
 
 np.random.seed(0)
 tf.set_random_seed(0)
@@ -95,6 +96,12 @@ with tf.variable_scope("encoder"):
     encode_foutput = encode_final_forward_state[1]
     encode_boutput = encode_fboutput[1][:,0,:]
     encode_output = tf.matmul(encode_foutput, encode_wf) + tf.matmul(encode_boutput, encode_wb) + encode_b
+
+# PWLoss
+def NormalizedDistance(lhs, rhs):
+    nlhs = tf.nn.l2_normalize(lhs, 0)
+    nrhs = tf.nn.l2_normalize(rhs, 0)
+    return tf.reduce_sum(tf.square(nlhs - nrhs))
 
 # LanguageModel
 W_label_repr = tf.Variable(tf.random_uniform([num_label, label_repr_size], -1.0, 1.0))
