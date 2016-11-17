@@ -112,6 +112,21 @@ class Model:
             parameters = [forward_cell, backward_cell, forward_weight, backward_weight, bias]
             return encoded, parameters
 
+        def BidirectionalLSTMLayer(sequence_input, sequence_length, lstm_single_dim, output_dim):
+            forward_cell = tf.nn.rnn_cell.BasicLSTMCell(lstm_single_dim, forget_bias=0.0)
+            backward_cell = tf.nn.rnn_cell.BasicLSTMCell(lstm_single_dim, forget_bias=0.0)
+            forward_weight = tf.Variable(tf.random_uniform([lstm_single_dim, output_dim], -1.0, 1.0))
+            backward_weight = tf.Variable(tf.random_uniform([lstm_single_dim, output_dim], -1.0, 1.0))
+            bias = tf.Variable(tf.random_uniform([output_dim], -1.0, 1.0))
+            both_sequence_output, both_final_state = tf.nn.bidirectional_dynamic_rnn(forward_cell, backward_cell, sequence_input, dtype=tf.float32, sequence_length=sequence_length)
+            forward_output_flat = tf.reshape(both_sequence_output[0], [-1, lstm_single_dim])
+            backward_output_flat = tf.reshape(both_sequence_output[1], [-1, lstm_single_dim])
+            layer_output_flat = tf.matmul(forward_output_flat, forward_weight) + tf.matmul(backward_output_flat, backward_weight) + bias
+            batch_size_op = tf.shape(sequence_input)[0]
+            layer_output = tf.reshape(layer_output_flat, [batch_size_op, -1, output_dim])
+            parameters = [forward_cell, backward_cell, forward_weight, backward_weight, bias]
+            return layer_output, parameters
+
         # c2w
         with tf.variable_scope("c2w"):
             char_vec_flat = tf.reshape(self.char_vec, [self.batch_size*self.max_sentence_length, self.max_word_length, self.char_size])
@@ -123,6 +138,9 @@ class Model:
         # encoder
         with tf.variable_scope("encoder"):
             self.encoder_output, self.encoder_parameters = BidirectionalEncoder(self.word_vec, self.l_word, self.encode_single_size, self.encode_size)
+        # BidirectionalLSTMLayer
+        with tf.variable_scope("biLSTM"):
+            self.biLSTM_output, self.biLSTM_parameters = BidirectionalLSTMLayer(self.word_vec, self.l_word, self.encode_single_size, self.encode_size)
 
         # PWLoss
         def NormalizedDistance(batch_vec, lookup_table):
