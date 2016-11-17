@@ -11,6 +11,7 @@ class Model:
     def __init__(self):
         self.usePWLoss = False
         self.useStructuredLearning = False
+        self.useLanguageModel = False
         # self.SetParameters()
         self.SetMinimalParameters()
 
@@ -91,6 +92,7 @@ class Model:
         self.is_train_op = tf.placeholder(tf.bool)
 
         self.x = tf.placeholder(tf.int32, [self.batch_size, self.max_sentence_length, self.max_word_length])
+        self.batch_size_op = tf.shape(self.x)[0]
         self.l_char = tf.placeholder(tf.int32, [self.batch_size, self.max_sentence_length])
         self.l_word = tf.placeholder(tf.int32, [self.batch_size])
         self.gold = tf.placeholder(tf.int32, [self.batch_size, self.max_sentence_length])
@@ -174,7 +176,12 @@ class Model:
             else:
                 self.logits_list = []
                 state = self.lm_cell.zero_state(self.batch_size, dtype=tf.float32)
-                lm_step_output, state = self.lm_cell(self.encoder_output, state)
+                if self.useLanguageModel:
+                    step_input = self.encoder_output
+                else:
+                    step_label_input = tf.nn.embedding_lookup(self.W_input_label_repr, tf.fill([self.batch_size_op], self.num_label))
+                    step_input = tf.concat(1, [self.biLSTM_output[:,0,:], step_label_input])
+                lm_step_output, state = self.lm_cell(step_input, state)
                 step_logits = tf.matmul(lm_step_output, self.lm_w) + self.lm_b
                 self.logits_list.append(step_logits)
                 for step in range(1, self.max_sentence_length):
@@ -182,7 +189,11 @@ class Model:
                     step_gold_input = tf.nn.embedding_lookup(self.W_input_label_repr, self.gold[:,step])
                     previous_top = tf.reshape(tf.nn.top_k(step_logits)[1], [self.batch_size])
                     step_top_input = tf.nn.embedding_lookup(self.W_input_label_repr, previous_top)
-                    step_input = tf.cond(self.is_train_op, lambda:step_gold_input, lambda:step_top_input)
+                    step_label_input = tf.cond(self.is_train_op, lambda:step_gold_input, lambda:step_top_input)
+                    if self.useLanguageModel:
+                        step_input = step_label_input
+                    else:
+                        step_input = tf.concat(1, [self.biLSTM_output[:,step,:], step_label_input])
                     lm_step_output, state = self.lm_cell(step_input, state)
                     step_logits = tf.matmul(lm_step_output, self.lm_w) + self.lm_b
                     self.logits_list.append(step_logits)
