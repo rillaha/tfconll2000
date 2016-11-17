@@ -14,9 +14,11 @@ class Indexer:
         self.filename = source_file
         self.isOpen = True
 
-    def __initial_dictionary(self):
+    def __initial_dictionary(self, predict_target="chunk", other_label="O"):
         mode_candidates = ["char", "POS", "chunk"]
-        return {mode:{"UNK":0} for mode in mode_candidates}
+        output = {mode:{"UNK":0} for mode in mode_candidates if mode is not predict_target}
+        output[predict_target] = {other_label:0, "UNK":1}
+        return output
 
     def __read(self, source_sh, overwrite=True):
         for key in source_sh.keys():
