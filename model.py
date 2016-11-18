@@ -145,19 +145,25 @@ class Model:
             self.biLSTM_output, self.biLSTM_parameters = BidirectionalLSTMLayer(self.word_vec, self.l_word, self.encode_single_size, self.encode_size)
 
         # PWLoss
-        def NormalizedDistance(batch_vec, lookup_table):
-            batch_size = batch_vec.get_shape()[0].value
-            dim = batch_vec.get_shape()[1].value
+        def NormalizedDistance(batch_vec, lookup_table, append_other=True):
+            margin = 1.0
+            batch_size_op, label_repr_dim_op = tf.shape(batch_vec)[0:2]
             nvec = tf.nn.l2_normalize(batch_vec, 1)
             ntable = tf.nn.l2_normalize(lookup_table, 1)
-            diffs = ntable - tf.reshape(nvec, [batch_size, 1, dim])
-            distances = tf.reduce_sum(tf.square(diffs), 2)
-            # shape(distances)=[batch_size, num_of_lookup_vecs]
+            diffs = ntable - tf.reshape(nvec, [batch_size_op, 1, label_repr_dim_op])
+            distances_except_other = tf.reduce_sum(tf.square(diffs), 2)
+            if append_other:
+                # shape(distances)=[batch_size_op, num_of_lookup_vecs+1]
+                distances_other = tf.fill([batch_size_op, 1], margin)
+                distances = tf.concat(1, [distances_other, distances_except_other])
+            else:
+                # shape(distances)=[batch_size_op, num_of_lookup_vecs]
+                distances = distances_except_other
             return distances
 
         # LanguageModel
         self.W_input_label_repr = tf.Variable(tf.random_uniform([self.num_label+1, self.label_repr_size], -1.0, 1.0))
-        self.W_output_label_repr = tf.Variable(tf.random_uniform([self.num_label+1, self.label_repr_size], -1.0, 1.0))
+        self.W_output_label_repr = tf.Variable(tf.random_uniform([self.num_label-1, self.label_repr_size], -1.0, 1.0))
         self.outputs = []
         with tf.variable_scope("lm") as scope:
             self.lm_cell = tf.nn.rnn_cell.BasicLSTMCell(self.lm_size, forget_bias=0.0)
