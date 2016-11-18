@@ -162,8 +162,8 @@ class Model:
             return distances
 
         # LanguageModel
-        self.W_input_label_repr = tf.Variable(tf.random_uniform([self.num_label+1, self.label_repr_size], -1.0, 1.0))
-        self.W_output_label_repr = tf.Variable(tf.random_uniform([self.num_label-1, self.label_repr_size], -1.0, 1.0))
+        self.W_input_label_repr = tf.Variable(tf.random_uniform([self.num_label+1, self.label_repr_size], -1.0, 1.0)) # add BOS
+        self.W_output_label_repr = tf.Variable(tf.random_uniform([self.num_label-1, self.label_repr_size], -1.0, 1.0)) # subtract other
         self.outputs = []
         with tf.variable_scope("lm") as scope:
             self.lm_cell = tf.nn.rnn_cell.BasicLSTMCell(self.lm_size, forget_bias=0.0)
