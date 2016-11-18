@@ -9,7 +9,7 @@ tf.set_random_seed(0)
 
 class Model:
     def __init__(self):
-        self.usePWLoss = False
+        self.usePWLoss = True
         self.useStructuredLearning = False
         self.useLanguageModel = False
         # self.SetParameters()
@@ -44,7 +44,9 @@ class Model:
         self.encode_size = 100
         self.lm_size = 100
         self.num_label = 24
-        self.label_repr_size = self.encode_size
+        self.input_label_repr_size = self.encode_size
+        self.output_label_repr_size = 20
+        self.margin = 1.0
         self.beam_width = 10
         return
 
@@ -60,7 +62,9 @@ class Model:
         self.encode_size = 2
         self.lm_size = 3
         self.num_label = 24
-        self.label_repr_size = self.encode_size
+        self.input_label_repr_size = self.encode_size
+        self.output_label_repr_size = 5
+        self.margin = 1.0
         self.beam_width = 10
         return
 
@@ -93,6 +97,7 @@ class Model:
 
         self.x = tf.placeholder(tf.int32, [self.batch_size, self.max_sentence_length, self.max_word_length])
         self.batch_size_op = tf.shape(self.x)[0]
+        self.sentence_length_op = tf.shape(self.x)[1]
         self.l_char = tf.placeholder(tf.int32, [self.batch_size, self.max_sentence_length])
         self.l_word = tf.placeholder(tf.int32, [self.batch_size])
         self.gold = tf.placeholder(tf.int32, [self.batch_size, self.max_sentence_length])
@@ -145,9 +150,10 @@ class Model:
             self.biLSTM_output, self.biLSTM_parameters = BidirectionalLSTMLayer(self.word_vec, self.l_word, self.encode_single_size, self.encode_size)
 
         # PWLoss
-        def NormalizedDistance(batch_vec, lookup_table, append_other=True):
-            margin = 1.0
-            batch_size_op, label_repr_dim_op = tf.shape(batch_vec)[0:2]
+        def NormalizedDistance(batch_vec, lookup_table, margin, append_other=True):
+            shape_of_batch_vec = tf.shape(batch_vec)
+            batch_size_op = shape_of_batch_vec[0]
+            label_repr_dim_op = shape_of_batch_vec[1]
             nvec = tf.nn.l2_normalize(batch_vec, 1)
             ntable = tf.nn.l2_normalize(lookup_table, 1)
             diffs = ntable - tf.reshape(nvec, [batch_size_op, 1, label_repr_dim_op])
@@ -162,56 +168,67 @@ class Model:
             return distances
 
         # LanguageModel
-        self.W_input_label_repr = tf.Variable(tf.random_uniform([self.num_label+1, self.label_repr_size], -1.0, 1.0)) # add BOS
-        self.W_output_label_repr = tf.Variable(tf.random_uniform([self.num_label-1, self.label_repr_size], -1.0, 1.0)) # subtract other
+        self.W_input_label_repr = tf.Variable(tf.random_uniform([self.num_label+1, self.input_label_repr_size], -1.0, 1.0)) # add BOS
+        self.W_output_label_repr = tf.Variable(tf.random_uniform([self.num_label-1, self.output_label_repr_size], -1.0, 1.0)) # subtract other
         self.outputs = []
         with tf.variable_scope("lm") as scope:
             self.lm_cell = tf.nn.rnn_cell.BasicLSTMCell(self.lm_size, forget_bias=0.0)
-            self.lm_w = tf.Variable(tf.random_uniform([self.lm_size, self.num_label], -1.0, 1.0))
-            self.lm_b = tf.Variable(tf.random_uniform([self.num_label], -1.0, 1.0))
             if self.usePWLoss:
-                pass
-                # scores = tf.matmul(output, lm_w) + lm_b
-                # top_k = tf.nn.top_k(scores, k=beam_width)
-                # for b in range(beam_width):
-                #     rank_b = tf.transpose(top_k[1])[b,:]
-                #     rank_b_embed = tf.nn.embedding_lookup(W_input_label_repr, rank_b)
-                #     scope.reuse_variables()
-                #     rank_b_output, rank_b_state = lm_cell(rank_b_embed, new_state)
-                #     rank_b_score = tf.matmul(rank_b_output, lm_w) + lm_b
+                self.lm_w = tf.Variable(tf.random_uniform([self.lm_size, self.output_label_repr_size], -1.0, 1.0))
+                self.lm_b = tf.Variable(tf.random_uniform([self.output_label_repr_size], -1.0, 1.0))
             else:
-                self.logits_list = []
-                state = self.lm_cell.zero_state(self.batch_size, dtype=tf.float32)
+                self.lm_w = tf.Variable(tf.random_uniform([self.lm_size, self.num_label], -1.0, 1.0))
+                self.lm_b = tf.Variable(tf.random_uniform([self.num_label], -1.0, 1.0))
+            self.logits_list = []
+            state = self.lm_cell.zero_state(self.batch_size, dtype=tf.float32)
+            if self.useLanguageModel:
+                step_input = self.encoder_output
+            else:
+                step_label_input = tf.nn.embedding_lookup(self.W_input_label_repr, tf.fill([self.batch_size_op], self.num_label))
+                step_input = tf.concat(1, [self.biLSTM_output[:,0,:], step_label_input])
+            lm_step_output, state = self.lm_cell(step_input, state)
+            step_logits = tf.matmul(lm_step_output, self.lm_w) + self.lm_b
+            if self.usePWLoss:
+                step_logits = -NormalizedDistance(step_logits, self.W_output_label_repr, self.margin)
+            self.logits_list.append(step_logits)
+            for step in range(1, self.max_sentence_length):
+                scope.reuse_variables()
+                step_gold_input = tf.nn.embedding_lookup(self.W_input_label_repr, self.gold[:,step])
+                previous_top = tf.reshape(tf.nn.top_k(step_logits)[1], [self.batch_size])
+                step_top_input = tf.nn.embedding_lookup(self.W_input_label_repr, previous_top)
+                # step_label_input = tf.cond(self.is_train_op, lambda:step_gold_input, lambda:step_top_input)
+                step_label_input = step_top_input
                 if self.useLanguageModel:
-                    step_input = self.encoder_output
+                    step_input = step_label_input
                 else:
-                    step_label_input = tf.nn.embedding_lookup(self.W_input_label_repr, tf.fill([self.batch_size_op], self.num_label))
-                    step_input = tf.concat(1, [self.biLSTM_output[:,0,:], step_label_input])
+                    step_input = tf.concat(1, [self.biLSTM_output[:,step,:], step_label_input])
                 lm_step_output, state = self.lm_cell(step_input, state)
                 step_logits = tf.matmul(lm_step_output, self.lm_w) + self.lm_b
+                if self.usePWLoss:
+                    step_logits = -NormalizedDistance(step_logits, self.W_output_label_repr, self.margin)
                 self.logits_list.append(step_logits)
-                for step in range(1, self.max_sentence_length):
-                    scope.reuse_variables()
-                    step_gold_input = tf.nn.embedding_lookup(self.W_input_label_repr, self.gold[:,step])
-                    previous_top = tf.reshape(tf.nn.top_k(step_logits)[1], [self.batch_size])
-                    step_top_input = tf.nn.embedding_lookup(self.W_input_label_repr, previous_top)
-                    step_label_input = tf.cond(self.is_train_op, lambda:step_gold_input, lambda:step_top_input)
-                    if self.useLanguageModel:
-                        step_input = step_label_input
-                    else:
-                        step_input = tf.concat(1, [self.biLSTM_output[:,step,:], step_label_input])
-                    lm_step_output, state = self.lm_cell(step_input, state)
-                    step_logits = tf.matmul(lm_step_output, self.lm_w) + self.lm_b
-                    self.logits_list.append(step_logits)
-                # shape(logits)=(self.batch_size, self.max_sentence_length, self.num_label)
-                self.logits = tf.pack(self.logits_list, axis=1)
-                mask = tf.sequence_mask(self.l_word, self.max_sentence_length, dtype=tf.float32)
-                self.word_count = tf.to_float(tf.reduce_sum(self.l_word))
+            # shape(logits)=(self.batch_size, self.max_sentence_length, self.num_label)
+            self.logits = tf.pack(self.logits_list, axis=1)
+            mask = tf.sequence_mask(self.l_word, self.max_sentence_length, dtype=tf.float32)
+            self.word_count = tf.to_float(tf.reduce_sum(self.l_word))
+            if self.usePWLoss:
+                except_correct_mask = tf.one_hot(self.gold, depth=self.num_label, on_value=-2.0)
+                doubled_other_mask = tf.one_hot(tf.zeros_like(self.gold), depth=self.num_label, on_value=2.0, off_value=1.0)
+                masked_logits = self.logits * doubled_other_mask + except_correct_mask
+                neg_nearest_distances_except_gold, nearest_index_except_gold = tf.nn.top_k(masked_logits)
+                neg_nearest_distances_except_gold = tf.reshape(neg_nearest_distances_except_gold, [self.batch_size_op, self.sentence_length_op])
+                nearest_index_except_gold = tf.reshape(nearest_index_except_gold, [self.batch_size_op, self.sentence_length_op])
+                gold_mask = tf.one_hot(self.gold, depth=self.num_label)
+                neutral_other_mask = tf.one_hot(tf.zeros_like(self.gold), depth=self.num_label, on_value=0.0, off_value=1.0)
+                neg_gold_distances = tf.reduce_sum(self.logits * gold_mask * neutral_other_mask, 2)
+                pwloss = tf.maximum(neg_nearest_distances_except_gold - neg_gold_distances + self.margin, 0.0) * mask
+                self.loss = tf.reduce_sum(pwloss)
+            else:
                 self.loss = tf.reduce_sum(tf.nn.sparse_softmax_cross_entropy_with_logits(self.logits, self.gold) * mask)
-                self.average_loss = self.loss / self.word_count
-                self.predict = tf.to_int32(tf.argmax(self.logits, dimension=2))
-                self.correct = tf.reduce_sum(tf.to_float(tf.equal(self.predict, self.gold)) * mask)
-                self.accuracy = self.correct / self.word_count
+            self.average_loss = self.loss / self.word_count
+            self.predict = tf.to_int32(tf.argmax(self.logits, dimension=2))
+            self.correct = tf.reduce_sum(tf.to_float(tf.equal(self.predict, self.gold)) * mask)
+            self.accuracy = self.correct / self.word_count
         return
 
     def MakeTrainOp(self):
@@ -240,8 +257,13 @@ class Model:
         dev_step_end = int(np.ceil(len(self.dev_data.examples) / float(self.batch_size)))
         for step in range(dev_step_end):
             sample_x, sample_l_char, sample_l_word, sample_gold = self.dev_data.RandomSample(self.batch_size)
-            fd = {self.x:sample_x, self.l_char:sample_l_char, self.l_word:sample_l_word, self.gold:sample_gold, self.is_train_op:True}
+            fd = {self.x:sample_x, self.l_char:sample_l_char, self.l_word:sample_l_word, self.gold:sample_gold, self.is_train_op:False}
             l, step_correct = sess.run([self.loss, self.correct], feed_dict=fd)
+            if step == 0:
+                print("gold=>", end="")
+                print(sample_gold[0])
+                print("pred=>", end="")
+                print(sess.run(self.predict, feed_dict={self.x:sample_x, self.l_char:sample_l_char, self.l_word:sample_l_word, self.is_train_op:False})[0])
             dev_loss += l
             dev_acc += step_correct
         dev_loss /= self.num_dev_word
