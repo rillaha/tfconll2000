@@ -180,12 +180,18 @@ class Model:
                 self.lm_w = tf.Variable(tf.random_uniform([self.lm_size, self.num_label], -1.0, 1.0))
                 self.lm_b = tf.Variable(tf.random_uniform([self.num_label], -1.0, 1.0))
             self.logits_list = []
-            state = self.lm_cell.zero_state(self.batch_size, dtype=tf.float32)
+            if self.useStructuredLearning:
+                state = self.lm_cell.zero_state(self.batch_size * self.beam_width, dtype=tf.float32)
+            else:
+                state = self.lm_cell.zero_state(self.batch_size, dtype=tf.float32)
             if self.useLanguageModel:
                 step_input = self.encoder_output
             else:
                 step_label_input = tf.nn.embedding_lookup(self.W_input_label_repr, tf.fill([self.batch_size_op], self.num_label))
                 step_input = tf.concat(1, [self.biLSTM_output[:,0,:], step_label_input])
+            if self.useStructuredLearning:
+                step_input = tf.pack([step_input for i in range(self.beam_width)])
+                step_input = tf.reshape(tf.transpose(step_input, [1,0,2]), [self.batch_size_op*self.beam_width, -1])
             lm_step_output, state = self.lm_cell(step_input, state)
             step_logits = tf.matmul(lm_step_output, self.lm_w) + self.lm_b
             if self.usePWLoss:
@@ -193,8 +199,50 @@ class Model:
             self.logits_list.append(step_logits)
             for step in range(1, self.max_sentence_length):
                 scope.reuse_variables()
-                step_gold_input = tf.nn.embedding_lookup(self.W_input_label_repr, self.gold[:,step])
-                previous_top = tf.reshape(tf.nn.top_k(step_logits)[1], [self.batch_size])
+                if self.useStructuredLearning:
+                    if step == 1:
+                        previous_top_list = []
+                        for batch_wise in range(self.batch_size):
+                            first_score = step_logits[self.beam_width*batch_wise]
+                            batch_step_gold = gold[batch_wise, step]
+                            left = first_score[:batch_step_gold]
+                            right = first_score[batch_step_gold+1:]
+                            first_score_except_gold = tf.concat(0, [left,right])
+                            top_values_except_gold, top_indices_except_gold = tf.nn.top_k(first_score_except_gold, self.beam_width - 1)
+                            top_indices_except_gold += tf.to_int32(top_indices_except_gold >= batch_step_gold)
+                            def avoid_using_gold():
+                                return tf.concat(0, [tf.reshape(batch_step_gold,[1]), top_indices_except_gold])
+                            batch_wise_previous_top = tf.cond(self.is_train_op, avoid_using_gold, lambda: tf.nn.top_k(first_score, self.beam_width)[1])
+                            previous_top_list.append(batch_wise_previous_top)
+                        previous_top = tf.concat(0, previous_top_list)
+                    else:
+                        previous_top_list = []
+                        aligned_state_list = []
+                        for batch_wise in range(self.batch_size):
+                            score = step_logits[self.beam_width*batch_wise:self.beam_width*(batch_wise+1)]
+                            score_flat = tf.reshape(score, [-1])
+                            # assume is_train_op == True, then gold_sequence is top row
+                            batch_step_gold = gold[batch_wise, step]
+                            left = score_flat[:batch_step_gold]
+                            right = score_flat[batch_step_gold+1:]
+                            score_except_gold = tf.concat(0, [left,right])
+                            top_values_except_gold, top_indices_except_gold = tf.nn.top_k(score_except_gold, self.beam_width - 1)
+                            top_indices_except_gold += tf.to_int32(top_indices_except_gold >= batch_step_gold)
+                            def avoid_using_gold():
+                                return tf.concat(0, [tf.reshape(batch_step_gold,[1]), top_indices_except_gold])
+                            batch_wise_previous_top = tf.cond(self.is_train_op, avoid_using_gold, lambda: tf.nn.top_k(score_flat, self.beam_width)[1])
+                            previous_top_list.append(batch_wise_previous_top % self.num_label)
+                            batch_wise_state = state[batch_wise*self.beam_width:self.beam_width*(batch_wise+1)]
+                            batch_wise_aligned_state_indices = batch_wise_previous_top // self.num_label
+                            batch_wise_aligned_state = tf.nn.embedding_lookup(batch_wise_state, batch_wise_aligned_state_indices)
+                            aligned_state_list.append(batch_wise_aligned_state)
+                        previous_top = tf.concat(0, previous_top_list)
+                        state = tf.concat(0, aligned_state_list)
+                    # TODO:Loss
+                    pass
+                else:
+                    step_gold_input = tf.nn.embedding_lookup(self.W_input_label_repr, self.gold[:,step])
+                    previous_top = tf.reshape(tf.nn.top_k(step_logits)[1], [self.batch_size])
                 step_top_input = tf.nn.embedding_lookup(self.W_input_label_repr, previous_top)
                 # step_label_input = tf.cond(self.is_train_op, lambda:step_gold_input, lambda:step_top_input)
                 step_label_input = step_top_input
