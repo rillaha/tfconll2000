@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-import sys
+import sys, time
 import tensorflow as tf
 import numpy as np
 import conllreader
@@ -10,10 +10,10 @@ tf.set_random_seed(0)
 
 class Model:
     def __init__(self):
-        self.usePWLoss = True
+        self.usePWLoss = False
         self.useStructuredLearning = False
         self.useLanguageModel = False
-        # self.SetParameters()
+        #self.SetParameters()
         self.SetMinimalParameters()
 
     def Run(self, sess):
@@ -24,17 +24,21 @@ class Model:
         sess.run(tf.initialize_all_variables())
 
         print("run")
-        for it in range(10):
+        for it in range(30):
+            start_train_time = time.time()
             print("train:")
             train_loss, train_acc = self.Train(sess)
-            print("iter:%d  loss:%.5f acc:%.5f" % (it, train_loss, train_acc))
+            train_time = time.time() - start_train_time
+            print("iter:%d time:%.5f  loss:%.5f acc:%.5f" % (it, train_time, train_loss, train_acc))
+            start_dev_time = time.time()
             print("devel:")
             dev_loss, dev_acc = self.Dev(sess)
-            print("iter:%d  loss:%.5f acc:%.5f" % (it, dev_loss, dev_acc))
+            dev_time = time.time() - start_dev_time
+            print("iter:%d time:%.5f  loss:%.5f acc:%.5f" % (it, dev_time, dev_loss, dev_acc))
         return
 
     def SetParameters(self):
-        self.batch_size = 32
+        self.batch_size = 8
         self.max_sentence_length = 78
         self.max_word_length = 60
         self.char_size = 50
@@ -52,7 +56,7 @@ class Model:
         return
 
     def SetMinimalParameters(self):
-        self.batch_size = 128
+        self.batch_size = 8
         self.max_sentence_length = 78
         self.max_word_length = 60
         self.char_size = 2
@@ -110,16 +114,16 @@ class Model:
         with tf.variable_scope("c2w"):
             char_vec_flat = tf.reshape(self.char_vec, [self.batch_size*self.max_sentence_length, self.max_word_length, self.char_size])
             l_char_flat = tf.reshape(self.l_char, [self.batch_size*self.max_sentence_length])
-            c2w_output_flat, self.c2w_parameters = BidirectionalEncoder(char_vec_flat, l_char_flat, self.c2w_single_size, self.word_size)
+            c2w_output_flat, self.c2w_parameters = BidirectionalEncoder(char_vec_flat, l_char_flat, self.max_word_length, self.c2w_single_size, self.word_size)
             self.c2w_output = tf.reshape(c2w_output_flat, [self.batch_size, self.max_sentence_length, self.word_size])
         self.word_vec = self.c2w_output
 
         # encoder
         with tf.variable_scope("encoder"):
-            self.encoder_output, self.encoder_parameters = BidirectionalEncoder(self.word_vec, self.l_word, self.encode_single_size, self.encode_size)
+            self.encoder_output, self.encoder_parameters = BidirectionalEncoder(self.word_vec, self.l_word, self.max_sentence_length, self.encode_single_size, self.encode_size)
         # BidirectionalLSTMLayer
         with tf.variable_scope("biLSTM"):
-            self.biLSTM_output, self.biLSTM_parameters = BidirectionalLSTMLayer(self.word_vec, self.l_word, self.encode_single_size, self.encode_size)
+            self.biLSTM_output, self.biLSTM_parameters = BidirectionalLSTMLayer(self.word_vec, self.l_word, self.max_sentence_length, self.encode_single_size, self.encode_size)
 
         # PWLoss
         def NormalizedDistance(batch_vec, lookup_table, margin, append_other=True):
@@ -213,12 +217,13 @@ class Model:
         train_acc = 0.0
         train_step_end = int(np.ceil(len(self.train_data.examples) / float(self.batch_size)))
         for step in range(train_step_end):
+            start_time = time.time()
             sample_x, sample_l_char, sample_l_word, sample_gold = self.train_data.RandomSample(self.batch_size)
             fd = {self.x:sample_x, self.l_char:sample_l_char, self.l_word:sample_l_word, self.gold:sample_gold, self.is_train_op:True}
             al, l, c, _ = sess.run([self.average_loss, self.loss, self.correct, self.train_op], feed_dict=fd)
             train_loss += l
             train_acc += c
-            if step % (train_step_end // 10) == 0: print(al)
+            if step % (train_step_end // 10) == 0: print("time: %.8f    average_loss: %.8f" % (time.time() - start_time, al))
         train_loss /= self.num_train_word
         train_acc /= self.num_train_word
         return train_loss, train_acc
